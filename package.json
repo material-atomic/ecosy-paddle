@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Paddle Billing for an app with plans: a plan's prices kept in Paddle, and webhooks read back as who has which plan until when.",
   "license": "MIT",
+  "author": "material-atomic",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/material-atomic/ecosy-paddle.git"
+  },
   "type": "module",
   "files": [
     "dist",
@@ -25,5 +30,8 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
