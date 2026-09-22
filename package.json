@@ -28,6 +28,12 @@
   "peerDependencies": {
     "@paddle/paddle-node-sdk": "^3.10.0"
   },
+  "devDependencies": {
+    "@paddle/paddle-node-sdk": "^3.10.0",
+    "@types/node": "^20",
+    "esbuild": "^0.28.2",
+    "typescript": "^5"
+  },
   "engines": {
     "node": ">=22"
   },
