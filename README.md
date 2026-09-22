@@ -46,6 +46,42 @@ await billing.archivePrice(id); // no longer offered; subscriptions on it carry 
 - `archivePrice` refuses a price that no plan owns, so an admin screen built on
   it cannot archive whatever else is in the account.
 
+## Checkout and portal
+
+```ts
+const { transactionId } = await billing.checkout({
+  priceId,
+  email: user.email,
+  customData: { order_id: order.id, user_id: user.id },
+});
+// Paddle.js: Paddle.Checkout.open({ transactionId })
+
+const url = await billing.portal(customerId, [subscriptionId]); // card, invoices, cancelling
+```
+
+The transaction is made on the server, so the custom data is the app's. Only
+active prices that belong to a plan can be bought.
+
+## Signed custom data
+
+Paddle signs every webhook, which says the event came from Paddle. It does not
+say the custom data in it came from the app: anyone holding the public client
+token can open a checkout with custom data of their own. Give the package a
+secret Paddle never sees:
+
+```ts
+PaddleBilling({ apiKey, webhookSecret, customDataSecret: process.env.ORDER_SECRET });
+```
+
+`checkout()` then signs the custom data it writes (`sig`, HMAC-SHA256 over the
+sorted fields), and every event reports what still carries that signature as
+`signed` — `null` when it is missing, wrong, or any field was changed, added
+or dropped. Paddle copies custom data from the checkout's transaction to the
+subscription and on to every renewal, so the signature comes back on all of
+them. Act on `event.signed`, not on `event.customData`.
+
+`signCustomData` and `verifyCustomData` are exported for anything else.
+
 ## Webhooks
 
 ```ts
@@ -79,6 +115,12 @@ A `SubscriptionEvent` carries:
 | `customData` | The subscription's own — where the app's user id goes. |
 | `occurredAt` | Webhooks arrive out of order: ignore one older than the newest you acted on. |
 | `eventId` | The same event redelivered has the same id. |
+
+`transaction.paid` and `transaction.completed` come back as a
+`TransactionEvent` — `transactionId`, `origin` (`web`/`api` for a checkout,
+`subscription_recurring` for a renewal), `total`, `currency`, `signed`. One
+payment sends both events and Paddle retries either, so record payments by
+`transactionId` and act the first time only.
 
 Everything else comes back as `{ kind: "other" }`.
 

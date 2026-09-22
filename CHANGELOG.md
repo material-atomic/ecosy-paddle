@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `checkout({ priceId, email, name?, customData })` — a draft transaction made
+  on the server for Paddle.js to open; the customer is found by email or made.
+  Refuses prices no plan owns and archived ones.
+- `portal(customerId, subscriptionIds?)` — a customer portal link.
+- `customDataSecret` — custom data written by `checkout()` is signed, and
+  events report the verified fields as `signed`. `signCustomData` and
+  `verifyCustomData` are exported.
+- `TransactionEvent` for `transaction.paid` and `transaction.completed`.
+
+### Changed
+
+- The source is one file, so an app can compile it directly without mapping
+  `./x.js` imports to `x.ts`.
+
 ## 0.1.0
 
 First cut, written for RunSnip's plans and kept free of it.

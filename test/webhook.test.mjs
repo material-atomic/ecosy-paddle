@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { PaddleBilling, PaddleConfigError, WebhookSignatureError } from "../dist/index.js";
+import { PaddleBilling, PaddleConfigError, WebhookSignatureError, signCustomData, verifyCustomData } from "../dist/index.js";
 
 const SECRET = "pdl_ntfset_test_secret";
-const Billing = PaddleBilling({ apiKey: "pdl_sdbx_apikey_test", webhookSecret: SECRET });
+const ORDERS = "app-order-secret";
+const Billing = PaddleBilling({ apiKey: "pdl_sdbx_apikey_test", webhookSecret: SECRET, customDataSecret: ORDERS });
 const billing = new Billing();
 
 /* Signed the way Paddle signs: HMAC-SHA256 of `${ts}:${body}`, in `ts=…;h1=…`. */
@@ -174,4 +175,57 @@ test("webhook() without a secret says so", async () => {
   const NoSecret = PaddleBilling({ apiKey: "pdl_sdbx_apikey_x" });
 
   assert.throws(() => new NoSecret().webhook("{}", "ts=1;h1=x"), PaddleConfigError);
+});
+
+test("custom data signed by the app verifies, and any change to it does not", () => {
+  const signed = signCustomData({ order_id: "ord_1", user_id: "42" }, ORDERS);
+
+  assert.deepEqual(verifyCustomData(signed, ORDERS), { order_id: "ord_1", user_id: "42" });
+  assert.equal(verifyCustomData({ ...signed, user_id: "43" }, ORDERS), null, "a changed field");
+  assert.equal(verifyCustomData({ ...signed, extra: "x" }, ORDERS), null, "an added field");
+  assert.equal(verifyCustomData({ order_id: "ord_1", sig: signed.sig }, ORDERS), null, "a dropped field");
+  assert.equal(verifyCustomData(signed, "another-secret"), null, "another secret");
+  assert.equal(verifyCustomData({ order_id: "ord_1", user_id: "42" }, ORDERS), null, "no signature");
+  assert.equal(verifyCustomData({ ...signed, user_id: 42 }, ORDERS), null, "a value that is not a string");
+  assert.equal(verifyCustomData(signed, undefined), null, "no secret to check with");
+});
+
+test("a subscription event reports its signed custom data, and nothing for a forgery", async () => {
+  const signed = signCustomData({ order_id: "ord_1", user_id: "42" }, ORDERS);
+  const good = subscriptionEvent("subscription.created", { custom_data: signed });
+  const forged = subscriptionEvent("subscription.created", { custom_data: { ...signed, user_id: "43" } });
+  const plain = subscriptionEvent("subscription.created");
+
+  assert.deepEqual((await billing.webhook(good, sign(good))).signed, { order_id: "ord_1", user_id: "42" });
+  assert.equal((await billing.webhook(forged, sign(forged))).signed, null);
+  assert.equal((await billing.webhook(plain, sign(plain))).signed, null);
+});
+
+function transactionEvent(type, overrides = {}) {
+  return JSON.stringify({
+    event_id: "evt_03test", event_type: type, occurred_at: at, notification_id: "ntf_03test",
+    data: {
+      id: "txn_01test", status: type === "transaction.completed" ? "completed" : "paid", customer_id: "ctm_01test",
+      address_id: "add_01test", business_id: null, custom_data: null, currency_code: "USD", origin: "web",
+      subscription_id: "sub_01test", invoice_id: null, invoice_number: null, collection_mode: "automatic",
+      discount_id: null, billing_details: null, billing_period: null, created_at: at, updated_at: at, billed_at: at,
+      items: [], details: { tax_rates_used: [], totals: { subtotal: "900", discount: "0", tax: "0", total: "900", credit: "0", balance: "0", grand_total: "900", fee: null, earnings: null, currency_code: "USD" }, adjusted_totals: null, payout_totals: null, adjusted_payout_totals: null, line_items: [] },
+      payments: [], checkout: null,
+      ...overrides,
+    },
+  });
+}
+
+test("a payment is read with its transaction id, origin, total and signed custom data", async () => {
+  const signed = signCustomData({ order_id: "ord_1", user_id: "42" }, ORDERS);
+  const body = transactionEvent("transaction.completed", { custom_data: signed, origin: "subscription_recurring" });
+  const event = await billing.webhook(body, sign(body));
+
+  assert.equal(event.kind, "transaction");
+  assert.equal(event.transactionId, "txn_01test");
+  assert.equal(event.origin, "subscription_recurring");
+  assert.equal(event.subscriptionId, "sub_01test");
+  assert.equal(event.total, "900");
+  assert.equal(event.currency, "USD");
+  assert.deepEqual(event.signed, { order_id: "ord_1", user_id: "42" });
 });

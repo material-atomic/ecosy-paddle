@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { Environment, Paddle, type Price, type Product, type TaxCategory } from "@paddle/paddle-node-sdk";
 
 /*
@@ -240,6 +241,65 @@ async function archivePrice(paddle: Paddle, priceId: string, options: CatalogOpt
 }
 
 // ---------------------------------------------------------------------------
+// Signed custom data
+
+/*
+ * Paddle signs every webhook, and that says the event came from Paddle. It
+ * does not say the custom data in it came from the app: anything that can
+ * open a checkout on the account — Paddle.js with the public client token, the
+ * dashboard — can write custom data. So the app signs its own, with a secret
+ * Paddle never sees, and believes only what still carries its signature when
+ * it comes back.
+ */
+
+const SIGNATURE_KEY = "sig";
+
+function canonical(fields: Record<string, string>): string {
+  return Object.keys(fields)
+    .filter((key) => key !== SIGNATURE_KEY)
+    .sort()
+    .map((key) => `${key}=${fields[key]}`)
+    .join("\n");
+}
+
+function hmac(secret: string, text: string): string {
+  return createHmac("sha256", secret).update(`v1\n${text}`).digest("base64url");
+}
+
+/** Custom data with the app's signature added, as `sig`. Values must be strings. */
+export function signCustomData(fields: Record<string, string>, secret: string): Record<string, string> {
+  if (!secret) throw new PaddleConfigError("A secret is required to sign custom data.");
+
+  const clean = Object.fromEntries(Object.entries(fields).filter(([key]) => key !== SIGNATURE_KEY));
+
+  return { ...clean, [SIGNATURE_KEY]: hmac(secret, canonical(clean)) };
+}
+
+/**
+ * The fields of custom data the app signed, or null if the signature is
+ * missing or wrong — including when any field was changed, added or dropped.
+ */
+export function verifyCustomData(customData: unknown, secret: string | undefined): Record<string, string> | null {
+  if (!secret || !customData || typeof customData !== "object") return null;
+
+  const data = customData as Record<string, unknown>;
+  const given = data[SIGNATURE_KEY];
+  if (typeof given !== "string") return null;
+
+  const fields: Record<string, string> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (key === SIGNATURE_KEY) continue;
+    if (typeof value !== "string") return null;
+    fields[key] = value;
+  }
+
+  const expected = Buffer.from(hmac(secret, canonical(fields)));
+  const actual = Buffer.from(given);
+
+  return expected.length === actual.length && timingSafeEqual(expected, actual) ? fields : null;
+}
+
+// ---------------------------------------------------------------------------
 // Webhooks
 
 export type SubscriptionStatus = "active" | "trialing" | "past_due" | "paused" | "canceled";
@@ -281,6 +341,36 @@ export interface SubscriptionEvent {
    * it opens the checkout, so the event can be matched back to the account.
    */
   customData: Record<string, unknown>;
+  /**
+   * The custom data the app signed, verified with `customDataSecret`; null if
+   * there is no secret, no signature, or it does not match. Act on this, not
+   * on `customData`.
+   */
+  signed: Record<string, string> | null;
+}
+
+/**
+ * A payment — the first one of a checkout, or a renewal. `transaction.paid`
+ * and `transaction.completed` both arrive for one payment; the transaction id
+ * is what records it once.
+ */
+export interface TransactionEvent {
+  kind: "transaction";
+  eventId: string;
+  eventType: string;
+  occurredAt: string;
+  transactionId: string;
+  status: string;
+  /** `web` or `api` for a checkout; `subscription_recurring` for a renewal; others for changes. */
+  origin: string;
+  subscriptionId: string | null;
+  customerId: string | null;
+  /** The total charged, in the currency's lowest unit, as Paddle writes it. */
+  total: string | null;
+  currency: string;
+  customData: Record<string, unknown>;
+  /** As on SubscriptionEvent. Renewals carry the subscription's custom data, so they carry the signature too. */
+  signed: Record<string, string> | null;
 }
 
 /** Any event this module does not reduce. Acknowledge it and move on. */
@@ -291,7 +381,10 @@ export interface OtherEvent {
   occurredAt: string;
 }
 
-export type BillingEvent = SubscriptionEvent | OtherEvent;
+export type BillingEvent = SubscriptionEvent | TransactionEvent | OtherEvent;
+
+/* Payments. `paid` is when the money is taken; `completed` follows once Paddle has done its own processing. */
+const TRANSACTION_EVENTS = new Set(["transaction.paid", "transaction.completed"]);
 
 /* The subscription.* events whose data is a subscription. */
 const SUBSCRIPTION_EVENTS = new Set([
@@ -324,6 +417,7 @@ interface SubscriptionData {
 function reduceSubscription(
   event: { eventId: string; eventType: string; occurredAt: string; data: SubscriptionData },
   planKey: string,
+  customDataSecret?: string,
 ): SubscriptionEvent {
   const subscription = event.data;
 
@@ -352,6 +446,43 @@ function reduceSubscription(
     customData: subscription.customData && typeof subscription.customData === "object"
       ? { ...(subscription.customData as Record<string, unknown>) }
       : {},
+    signed: verifyCustomData(subscription.customData, customDataSecret),
+  };
+}
+
+interface TransactionData {
+  id: string;
+  status: string;
+  origin: string;
+  subscriptionId: string | null;
+  customerId: string | null;
+  currencyCode: string;
+  customData: unknown;
+  details: { totals: { total: string } | null } | null;
+}
+
+function reduceTransaction(
+  event: { eventId: string; eventType: string; occurredAt: string; data: TransactionData },
+  customDataSecret?: string,
+): TransactionEvent {
+  const transaction = event.data;
+
+  return {
+    kind: "transaction",
+    eventId: event.eventId,
+    eventType: event.eventType,
+    occurredAt: event.occurredAt,
+    transactionId: transaction.id,
+    status: transaction.status,
+    origin: transaction.origin,
+    subscriptionId: transaction.subscriptionId ?? null,
+    customerId: transaction.customerId ?? null,
+    total: transaction.details?.totals?.total ?? null,
+    currency: transaction.currencyCode,
+    customData: transaction.customData && typeof transaction.customData === "object"
+      ? { ...(transaction.customData as Record<string, unknown>) }
+      : {},
+    signed: verifyCustomData(transaction.customData, customDataSecret),
   };
 }
 
@@ -371,6 +502,7 @@ async function readWebhook(
   signature: string | null | undefined,
   secret: string,
   planKey: string,
+  customDataSecret?: string,
 ): Promise<BillingEvent> {
   if (!signature) throw new WebhookSignatureError("The request carries no Paddle-Signature header.");
 
@@ -383,10 +515,62 @@ async function readWebhook(
   }
 
   if (SUBSCRIPTION_EVENTS.has(event.eventType)) {
-    return reduceSubscription(event as unknown as Parameters<typeof reduceSubscription>[0], planKey);
+    return reduceSubscription(event as unknown as Parameters<typeof reduceSubscription>[0], planKey, customDataSecret);
+  }
+
+  if (TRANSACTION_EVENTS.has(event.eventType)) {
+    return reduceTransaction(event as unknown as Parameters<typeof reduceTransaction>[0], customDataSecret);
   }
 
   return { kind: "other", eventId: event.eventId, eventType: event.eventType, occurredAt: event.occurredAt };
+}
+
+// ---------------------------------------------------------------------------
+// Buying
+
+/** What `checkout()` hands the browser: Paddle.js opens the checkout for this transaction. */
+export interface CheckoutSession {
+  transactionId: string;
+  customerId: string;
+}
+
+/**
+ * The Paddle customer for an email address, made the first time.
+ *
+ * One customer per address is what Paddle itself enforces, so looking up
+ * before creating is what keeps a second checkout from failing on a
+ * duplicate.
+ */
+async function customerFor(paddle: Paddle, email: string, name?: string | null): Promise<string> {
+  const address = email.trim().toLowerCase();
+
+  for await (const customer of paddle.customers.list({ email: [address], perPage: 1 })) {
+    return customer.id;
+  }
+
+  return (await paddle.customers.create({ email: address, name: name ?? null })).id;
+}
+
+/**
+ * A draft transaction for one price, made on the server.
+ *
+ * Made here rather than by Paddle.js from a price id, because the custom data
+ * travels with it: the app's user id is written by the server, so no page can
+ * open a checkout that credits somebody else's account. Paddle copies it onto
+ * the subscription the checkout creates, which is how a webhook finds the user.
+ */
+async function openCheckout(
+  paddle: Paddle,
+  input: { priceId: string; email: string; name?: string | null; customData: Record<string, string> },
+): Promise<CheckoutSession> {
+  const customerId = await customerFor(paddle, input.email, input.name);
+  const transaction = await paddle.transactions.create({
+    items: [{ priceId: input.priceId, quantity: 1 }],
+    customerId,
+    customData: input.customData,
+  });
+
+  return { transactionId: transaction.id, customerId };
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +590,12 @@ export interface PaddleBillingInit {
   environment?: PaddleEnvironment;
   /** The notification destination's secret key, for `webhook()`. */
   webhookSecret?: string;
+  /**
+   * The app's own secret for signing custom data — never given to Paddle.
+   * With it, `checkout()` signs the custom data it writes, and every event
+   * reports what still carries that signature as `signed`.
+   */
+  customDataSecret?: string;
   /**
    * The custom-data key that ties a Paddle product and price to a plan of the
    * app. Defaults to `plan_id`.
@@ -492,13 +682,45 @@ export function PaddleBilling(init: PaddleBillingInit) {
     }
 
     /**
+     * A checkout for one of a plan's prices, for one of the app's users.
+     *
+     * `customData` is written onto the transaction and, by Paddle, onto the
+     * subscription it creates; put the app's user id in it. Refuses a price
+     * that no plan owns, so a request cannot buy whatever else is in the
+     * account.
+     */
+    async checkout(input: { priceId: string; email: string; name?: string | null; customData: Record<string, string> }) {
+      const price = await this.paddle.prices.get(input.priceId);
+
+      if (price.status !== "active" || !planIdOf(price.customData, options.planKey)) {
+        throw new CatalogError("That price is not on sale.");
+      }
+
+      return openCheckout(this.paddle, {
+        ...input,
+        customData: init.customDataSecret ? signCustomData(input.customData, init.customDataSecret) : input.customData,
+      });
+    }
+
+    /**
+     * Where a customer manages what they pay for — card, invoices, cancelling.
+     * A link to Paddle's own portal, good for a short while; open it, do not
+     * store it.
+     */
+    async portal(customerId: string, subscriptionIds: string[] = []): Promise<string> {
+      const session = await this.paddle.customerPortalSessions.create(customerId, subscriptionIds);
+
+      return session.urls.general.overview;
+    }
+
+    /**
      * A webhook, checked and read. See `SubscriptionEvent` for what an app does
      * with one; anything else comes back as `kind: "other"`.
      */
     webhook(rawBody: string, signature: string | null | undefined) {
       if (!init.webhookSecret) throw new PaddleConfigError("webhookSecret is not set, so no webhook can be checked.");
 
-      return readWebhook(this.paddle, rawBody, signature, init.webhookSecret, options.planKey);
+      return readWebhook(this.paddle, rawBody, signature, init.webhookSecret, options.planKey, init.customDataSecret);
     }
   };
 }

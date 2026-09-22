@@ -86,3 +86,43 @@ test("bad prices are refused before anything reaches Paddle", { skip }, async ()
   await assert.rejects(billing.addPrice(plan, { interval: "month", amount: 900, currency: "dollars" }), CatalogError);
   await assert.rejects(billing.addPrice(plan, { interval: "month", amount: 900, trialDays: 0 }), CatalogError);
 });
+
+test("a checkout is a draft transaction for this price, with the app's user id on it", { skip }, async () => {
+  const [price] = await billing.prices(plan.id);
+  const email = `checkout-${plan.id}@example.test`;
+  const session = await billing.checkout({ priceId: price.id, email, customData: { user_id: "user-42" } });
+
+  assert.match(session.transactionId, /^txn_/);
+  assert.match(session.customerId, /^ctm_/);
+
+  const transaction = await billing.paddle.transactions.get(session.transactionId);
+  assert.equal(transaction.customData.user_id, "user-42");
+  assert.equal(transaction.items[0].price.id, price.id);
+
+  const again = await billing.checkout({ priceId: price.id, email: email.toUpperCase(), customData: { user_id: "user-42" } });
+  assert.equal(again.customerId, session.customerId, "the same address is the same customer");
+});
+
+test("a checkout for a price no plan owns, or an archived one, is refused", { skip }, async () => {
+  const [product] = products;
+  const stray = await billing.paddle.prices.create({
+    productId: product,
+    description: "Not a plan's price",
+    unitPrice: { amount: "100", currencyCode: "USD" },
+    billingCycle: { interval: "month", frequency: 1 },
+  });
+
+  await assert.rejects(billing.checkout({ priceId: stray.id, email: "x@example.test", customData: {} }), CatalogError);
+  await billing.paddle.prices.archive(stray.id);
+
+  const archived = (await billing.paddle.prices.list({ productId: [product], status: ["archived"] }).next())
+    .find((price) => price.customData?.plan_id === plan.id);
+  await assert.rejects(billing.checkout({ priceId: archived.id, email: "x@example.test", customData: {} }), CatalogError);
+});
+
+test("the portal is a link to Paddle's own pages for the customer", { skip }, async () => {
+  const customer = await billing.paddle.customers.create({ email: `portal-${plan.id}@example.test` });
+  const url = await billing.portal(customer.id);
+
+  assert.match(url, /^https:\/\/[^/]*paddle\.(com|io)\//);
+});
