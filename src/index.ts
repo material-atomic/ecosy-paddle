@@ -714,6 +714,27 @@ export function PaddleBilling(init: PaddleBillingInit) {
     }
 
     /**
+     * Cancels a subscription at the end of the period already paid for — the
+     * customer keeps what they bought, and is not charged again. Returns when
+     * that is. Paddle sends `subscription.updated` with the scheduled change,
+     * then `subscription.canceled` on the day.
+     */
+    async cancel(subscriptionId: string): Promise<{ cancelsAt: string | null }> {
+      const subscription = await this.paddle.subscriptions.cancel(subscriptionId, { effectiveFrom: "next_billing_period" });
+
+      return {
+        cancelsAt: subscription.scheduledChange?.action === "cancel"
+          ? subscription.scheduledChange.effectiveAt
+          : subscription.canceledAt,
+      };
+    }
+
+    /** Takes back a cancellation that has not happened yet: the subscription renews as before. */
+    async keep(subscriptionId: string): Promise<void> {
+      await this.paddle.subscriptions.update(subscriptionId, { scheduledChange: null });
+    }
+
+    /**
      * A link to the invoice PDF Paddle issued for a payment. Short-lived —
      * redirect to it, do not store it. The app checks the payment is the
      * caller's before asking.
