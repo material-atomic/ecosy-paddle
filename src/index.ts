@@ -714,6 +714,15 @@ export function PaddleBilling(init: PaddleBillingInit) {
     }
 
     /**
+     * A link to the invoice PDF Paddle issued for a payment. Short-lived —
+     * redirect to it, do not store it. The app checks the payment is the
+     * caller's before asking.
+     */
+    async invoiceUrl(transactionId: string): Promise<string> {
+      return (await this.paddle.transactions.getInvoicePDF(transactionId, { disposition: "attachment" })).url;
+    }
+
+    /**
      * A webhook, checked and read. See `SubscriptionEvent` for what an app does
      * with one; anything else comes back as `kind: "other"`.
      */

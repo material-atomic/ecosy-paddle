@@ -8,6 +8,7 @@
   on the server for Paddle.js to open; the customer is found by email or made.
   Refuses prices no plan owns and archived ones.
 - `portal(customerId, subscriptionIds?)` — a customer portal link.
+- `invoiceUrl(transactionId)` — a short-lived link to a payment's invoice PDF.
 - `customDataSecret` — custom data written by `checkout()` is signed, and
   events report the verified fields as `signed`. `signCustomData` and
   `verifyCustomData` are exported.
