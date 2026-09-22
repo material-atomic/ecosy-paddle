@@ -1,0 +1,29 @@
+{
+  "name": "@ecosy/paddle",
+  "version": "0.1.0",
+  "description": "Paddle Billing for an app with plans: a plan's prices kept in Paddle, and webhooks read back as who has which plan until when.",
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "peerDependencies": {
+    "@paddle/paddle-node-sdk": "^3.10.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
