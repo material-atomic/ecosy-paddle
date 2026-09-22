@@ -1,5 +1,11 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { Environment, Paddle, type Price, type Product, type TaxCategory } from "@paddle/paddle-node-sdk";
+import {
+  Environment,
+  Paddle,
+  type Price,
+  type Product,
+  type TaxCategory,
+} from "@paddle/paddle-node-sdk";
 
 /*
  * One file on purpose. Any relative import has to name its extension for Node
@@ -97,7 +103,8 @@ function toPlanPrice(price: Price, planId: string): PlanPrice | null {
 
   /* One-off prices, and cycles other than a single month or year, are not
      something this catalogue made; they are left alone rather than misread. */
-  if ((interval !== "month" && interval !== "year") || price.billingCycle?.frequency !== 1) return null;
+  if ((interval !== "month" && interval !== "year") || price.billingCycle?.frequency !== 1)
+    return null;
 
   const trial = price.trialPeriod;
 
@@ -110,7 +117,9 @@ function toPlanPrice(price: Price, planId: string): PlanPrice | null {
     currency: price.unitPrice.currencyCode,
     /* Trials this catalogue makes are counted in days; one written elsewhere in
        weeks or months is converted roughly rather than dropped. */
-    trialDays: !trial ? null : trial.frequency * ({ day: 1, week: 7, month: 30, year: 365 } as const)[trial.interval],
+    trialDays: !trial
+      ? null
+      : trial.frequency * ({ day: 1, week: 7, month: 30, year: 365 } as const)[trial.interval],
     createdAt: price.createdAt,
   };
 }
@@ -120,7 +129,11 @@ async function readCatalogue(paddle: Paddle, options: CatalogOptions): Promise<P
   const out: PlanCatalogue[] = [];
   let seen = 0;
 
-  for await (const product of paddle.products.list({ status: ["active"], include: ["prices"], perPage: 200 })) {
+  for await (const product of paddle.products.list({
+    status: ["active"],
+    include: ["prices"],
+    perPage: 200,
+  })) {
     if (++seen > MOST_PRODUCTS) break;
 
     const planId = planIdOf(product.customData, options.planKey);
@@ -138,7 +151,11 @@ async function readCatalogue(paddle: Paddle, options: CatalogOptions): Promise<P
   return out;
 }
 
-async function findProduct(paddle: Paddle, planId: string, options: CatalogOptions): Promise<Product | null> {
+async function findProduct(
+  paddle: Paddle,
+  planId: string,
+  options: CatalogOptions,
+): Promise<Product | null> {
   let seen = 0;
 
   for await (const product of paddle.products.list({ status: ["active"], perPage: 200 })) {
@@ -154,7 +171,11 @@ async function findProduct(paddle: Paddle, planId: string, options: CatalogOptio
  * made. A found product takes the plan's current name and description, so a
  * plan renamed in the app is renamed at checkout too.
  */
-async function ensureProduct(paddle: Paddle, plan: PlanInfo, options: CatalogOptions): Promise<Product> {
+async function ensureProduct(
+  paddle: Paddle,
+  plan: PlanInfo,
+  options: CatalogOptions,
+): Promise<Product> {
   const existing = await findProduct(paddle, plan.id, options);
   const description = plan.description?.trim() || null;
 
@@ -180,14 +201,20 @@ function checkNewPrice(input: NewPrice): Required<NewPrice> {
     throw new CatalogError("A price bills monthly or yearly.");
   }
   if (!Number.isInteger(input.amount) || input.amount <= 0) {
-    throw new CatalogError("The amount is a whole number above 0, in the currency's smallest unit (900 is $9.00).");
+    throw new CatalogError(
+      "The amount is a whole number above 0, in the currency's smallest unit (900 is $9.00).",
+    );
   }
 
   const currency = (input.currency ?? "USD").toUpperCase();
-  if (!/^[A-Z]{3}$/.test(currency)) throw new CatalogError(`"${input.currency}" is not a currency code.`);
+  if (!/^[A-Z]{3}$/.test(currency))
+    throw new CatalogError(`"${input.currency}" is not a currency code.`);
 
   const trialDays = input.trialDays ?? null;
-  if (trialDays !== null && (!Number.isInteger(trialDays) || trialDays < 1 || trialDays > MOST_TRIAL_DAYS)) {
+  if (
+    trialDays !== null &&
+    (!Number.isInteger(trialDays) || trialDays < 1 || trialDays > MOST_TRIAL_DAYS)
+  ) {
     throw new CatalogError(`A trial is 1 to ${MOST_TRIAL_DAYS} days, or none.`);
   }
 
@@ -201,7 +228,12 @@ function checkNewPrice(input: NewPrice): Required<NewPrice> {
  * it; a different amount is a new price, and the old one is archived — which
  * stops new checkouts, not existing subscriptions.
  */
-async function addPrice(paddle: Paddle, plan: PlanInfo, input: NewPrice, options: CatalogOptions): Promise<PlanPrice> {
+async function addPrice(
+  paddle: Paddle,
+  plan: PlanInfo,
+  input: NewPrice,
+  options: CatalogOptions,
+): Promise<PlanPrice> {
   const price = checkNewPrice(input);
   const product = await ensureProduct(paddle, plan, options);
 
@@ -230,7 +262,11 @@ async function addPrice(paddle: Paddle, plan: PlanInfo, input: NewPrice, options
  * Refuses a price that is not one of a plan's, so an app's admin screen cannot
  * be used to archive whatever else lives in the Paddle account.
  */
-async function archivePrice(paddle: Paddle, priceId: string, options: CatalogOptions): Promise<void> {
+async function archivePrice(
+  paddle: Paddle,
+  priceId: string,
+  options: CatalogOptions,
+): Promise<void> {
   const price = await paddle.prices.get(priceId);
 
   if (!planIdOf(price.customData, options.planKey)) {
@@ -267,7 +303,10 @@ function hmac(secret: string, text: string): string {
 }
 
 /** Custom data with the app's signature added, as `sig`. Values must be strings. */
-export function signCustomData(fields: Record<string, string>, secret: string): Record<string, string> {
+export function signCustomData(
+  fields: Record<string, string>,
+  secret: string,
+): Record<string, string> {
   if (!secret) throw new PaddleConfigError("A secret is required to sign custom data.");
 
   const clean = Object.fromEntries(Object.entries(fields).filter(([key]) => key !== SIGNATURE_KEY));
@@ -279,7 +318,10 @@ export function signCustomData(fields: Record<string, string>, secret: string): 
  * The fields of custom data the app signed, or null if the signature is
  * missing or wrong — including when any field was changed, added or dropped.
  */
-export function verifyCustomData(customData: unknown, secret: string | undefined): Record<string, string> | null {
+export function verifyCustomData(
+  customData: unknown,
+  secret: string | undefined,
+): Record<string, string> | null {
   if (!secret || !customData || typeof customData !== "object") return null;
 
   const data = customData as Record<string, unknown>;
@@ -423,13 +465,24 @@ function reduceSubscription(
 
   /* The first recurring item that names a plan. An app sells one plan per
      subscription; add-ons, if there are any, name none. */
-  const item = subscription.items.find((entry) =>
-    entry.recurring && (planIdOf(entry.price?.customData, planKey) || planIdOf(entry.product?.customData, planKey)),
-  ) ?? subscription.items.find((entry) => entry.recurring) ?? null;
+  const item =
+    subscription.items.find(
+      (entry) =>
+        entry.recurring &&
+        (planIdOf(entry.price?.customData, planKey) ||
+          planIdOf(entry.product?.customData, planKey)),
+    ) ??
+    subscription.items.find((entry) => entry.recurring) ??
+    null;
 
-  const planId = item ? planIdOf(item.price?.customData, planKey) ?? planIdOf(item.product?.customData, planKey) : null;
+  const planId = item
+    ? (planIdOf(item.price?.customData, planKey) ?? planIdOf(item.product?.customData, planKey))
+    : null;
   const scheduled = subscription.scheduledChange;
-  const running = subscription.status === "active" || subscription.status === "trialing" || subscription.status === "past_due";
+  const running =
+    subscription.status === "active" ||
+    subscription.status === "trialing" ||
+    subscription.status === "past_due";
 
   return {
     kind: "subscription",
@@ -441,11 +494,12 @@ function reduceSubscription(
     status: subscription.status,
     planId,
     priceId: item?.price?.id ?? null,
-    paidUntil: running ? subscription.currentBillingPeriod?.endsAt ?? null : null,
+    paidUntil: running ? (subscription.currentBillingPeriod?.endsAt ?? null) : null,
     cancelsAt: scheduled?.action === "cancel" ? scheduled.effectiveAt : null,
-    customData: subscription.customData && typeof subscription.customData === "object"
-      ? { ...(subscription.customData as Record<string, unknown>) }
-      : {},
+    customData:
+      subscription.customData && typeof subscription.customData === "object"
+        ? { ...(subscription.customData as Record<string, unknown>) }
+        : {},
     signed: verifyCustomData(subscription.customData, customDataSecret),
   };
 }
@@ -479,9 +533,10 @@ function reduceTransaction(
     customerId: transaction.customerId ?? null,
     total: transaction.details?.totals?.total ?? null,
     currency: transaction.currencyCode,
-    customData: transaction.customData && typeof transaction.customData === "object"
-      ? { ...(transaction.customData as Record<string, unknown>) }
-      : {},
+    customData:
+      transaction.customData && typeof transaction.customData === "object"
+        ? { ...(transaction.customData as Record<string, unknown>) }
+        : {},
     signed: verifyCustomData(transaction.customData, customDataSecret),
   };
 }
@@ -504,25 +559,40 @@ async function readWebhook(
   planKey: string,
   customDataSecret?: string,
 ): Promise<BillingEvent> {
-  if (!signature) throw new WebhookSignatureError("The request carries no Paddle-Signature header.");
+  if (!signature)
+    throw new WebhookSignatureError("The request carries no Paddle-Signature header.");
 
   let event;
 
   try {
     event = await paddle.webhooks.unmarshal(rawBody, secret, signature);
   } catch (error) {
-    throw new WebhookSignatureError(`The webhook's signature does not match: ${(error as Error).message}`);
+    throw new WebhookSignatureError(
+      `The webhook's signature does not match: ${(error as Error).message}`,
+    );
   }
 
   if (SUBSCRIPTION_EVENTS.has(event.eventType)) {
-    return reduceSubscription(event as unknown as Parameters<typeof reduceSubscription>[0], planKey, customDataSecret);
+    return reduceSubscription(
+      event as unknown as Parameters<typeof reduceSubscription>[0],
+      planKey,
+      customDataSecret,
+    );
   }
 
   if (TRANSACTION_EVENTS.has(event.eventType)) {
-    return reduceTransaction(event as unknown as Parameters<typeof reduceTransaction>[0], customDataSecret);
+    return reduceTransaction(
+      event as unknown as Parameters<typeof reduceTransaction>[0],
+      customDataSecret,
+    );
   }
 
-  return { kind: "other", eventId: event.eventId, eventType: event.eventType, occurredAt: event.occurredAt };
+  return {
+    kind: "other",
+    eventId: event.eventId,
+    eventType: event.eventType,
+    occurredAt: event.occurredAt,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -561,7 +631,12 @@ async function customerFor(paddle: Paddle, email: string, name?: string | null):
  */
 async function openCheckout(
   paddle: Paddle,
-  input: { priceId: string; email: string; name?: string | null; customData: Record<string, string> },
+  input: {
+    priceId: string;
+    email: string;
+    name?: string | null;
+    customData: Record<string, string>;
+  },
 ): Promise<CheckoutSession> {
   const customerId = await customerFor(paddle, input.email, input.name);
   const transaction = await paddle.transactions.create({
@@ -606,10 +681,16 @@ export interface PaddleBillingInit {
 }
 
 function environmentOf(apiKey: string, asked?: PaddleEnvironment): PaddleEnvironment {
-  const fromKey: PaddleEnvironment | null = apiKey.includes("_sdbx") ? "sandbox" : apiKey.includes("_live") ? "production" : null;
+  const fromKey: PaddleEnvironment | null = apiKey.includes("_sdbx")
+    ? "sandbox"
+    : apiKey.includes("_live")
+      ? "production"
+      : null;
 
   if (asked && fromKey && asked !== fromKey) {
-    throw new PaddleConfigError(`This is a ${fromKey} API key, and the environment is set to ${asked}.`);
+    throw new PaddleConfigError(
+      `This is a ${fromKey} API key, and the environment is set to ${asked}.`,
+    );
   }
 
   return asked ?? fromKey ?? "production";
@@ -641,7 +722,10 @@ export function PaddleBilling(init: PaddleBillingInit) {
   if (!init.apiKey) throw new PaddleConfigError("A Paddle API key is required.");
 
   const environment = environmentOf(init.apiKey, init.environment);
-  const options: CatalogOptions = { planKey: init.planKey ?? "plan_id", taxCategory: init.taxCategory ?? "saas" };
+  const options: CatalogOptions = {
+    planKey: init.planKey ?? "plan_id",
+    taxCategory: init.taxCategory ?? "saas",
+  };
   let client: Paddle | null = null;
 
   return class Billing {
@@ -689,7 +773,12 @@ export function PaddleBilling(init: PaddleBillingInit) {
      * that no plan owns, so a request cannot buy whatever else is in the
      * account.
      */
-    async checkout(input: { priceId: string; email: string; name?: string | null; customData: Record<string, string> }) {
+    async checkout(input: {
+      priceId: string;
+      email: string;
+      name?: string | null;
+      customData: Record<string, string>;
+    }) {
       const price = await this.paddle.prices.get(input.priceId);
 
       if (price.status !== "active" || !planIdOf(price.customData, options.planKey)) {
@@ -698,7 +787,9 @@ export function PaddleBilling(init: PaddleBillingInit) {
 
       return openCheckout(this.paddle, {
         ...input,
-        customData: init.customDataSecret ? signCustomData(input.customData, init.customDataSecret) : input.customData,
+        customData: init.customDataSecret
+          ? signCustomData(input.customData, init.customDataSecret)
+          : input.customData,
       });
     }
 
@@ -720,12 +811,15 @@ export function PaddleBilling(init: PaddleBillingInit) {
      * then `subscription.canceled` on the day.
      */
     async cancel(subscriptionId: string): Promise<{ cancelsAt: string | null }> {
-      const subscription = await this.paddle.subscriptions.cancel(subscriptionId, { effectiveFrom: "next_billing_period" });
+      const subscription = await this.paddle.subscriptions.cancel(subscriptionId, {
+        effectiveFrom: "next_billing_period",
+      });
 
       return {
-        cancelsAt: subscription.scheduledChange?.action === "cancel"
-          ? subscription.scheduledChange.effectiveAt
-          : subscription.canceledAt,
+        cancelsAt:
+          subscription.scheduledChange?.action === "cancel"
+            ? subscription.scheduledChange.effectiveAt
+            : subscription.canceledAt,
       };
     }
 
@@ -740,7 +834,9 @@ export function PaddleBilling(init: PaddleBillingInit) {
      * caller's before asking.
      */
     async invoiceUrl(transactionId: string): Promise<string> {
-      return (await this.paddle.transactions.getInvoicePDF(transactionId, { disposition: "attachment" })).url;
+      return (
+        await this.paddle.transactions.getInvoicePDF(transactionId, { disposition: "attachment" })
+      ).url;
     }
 
     /**
@@ -748,9 +844,17 @@ export function PaddleBilling(init: PaddleBillingInit) {
      * with one; anything else comes back as `kind: "other"`.
      */
     webhook(rawBody: string, signature: string | null | undefined) {
-      if (!init.webhookSecret) throw new PaddleConfigError("webhookSecret is not set, so no webhook can be checked.");
+      if (!init.webhookSecret)
+        throw new PaddleConfigError("webhookSecret is not set, so no webhook can be checked.");
 
-      return readWebhook(this.paddle, rawBody, signature, init.webhookSecret, options.planKey, init.customDataSecret);
+      return readWebhook(
+        this.paddle,
+        rawBody,
+        signature,
+        init.webhookSecret,
+        options.planKey,
+        init.customDataSecret,
+      );
     }
   };
 }

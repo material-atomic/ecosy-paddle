@@ -3,7 +3,8 @@
 ## 0.1.0
 
 First release, written for RunSnip's plans and kept free of it. The source
-is one file, so an app can also compile it directly from a checkout.
+is one file, so an app can also compile it directly from a checkout. Built
+with rollup as CommonJS and ESM, with types; ships an agent skill.
 
 ### Added
 

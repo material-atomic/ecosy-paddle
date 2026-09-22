@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { PaddleBilling, PaddleConfigError, WebhookSignatureError, signCustomData, verifyCustomData } from "../dist/index.js";
+import { PaddleBilling, PaddleConfigError, WebhookSignatureError, signCustomData, verifyCustomData } from "../dist/index.mjs";
 
 const SECRET = "pdl_ntfset_test_secret";
 const ORDERS = "app-order-secret";

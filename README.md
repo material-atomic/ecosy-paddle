@@ -124,8 +124,21 @@ payment sends both events and Paddle retries either, so record payments by
 
 Everything else comes back as `{ kind: "other" }`.
 
-## Tests
+## Development
 
-`node --test test/*.test.mjs`. The webhook tests sign their own payloads and
-need nothing. The catalogue tests run against Paddle's sandbox when
-`PADDLE_SANDBOX_API_KEY` is set, and archive what they made.
+```bash
+yarn install
+yarn build      # eslint, then rollup: dist/index.js (CommonJS), index.mjs (ESM), index.d.ts
+yarn test       # build, the types test, then node --test tests/*.test.mjs
+yarn format     # prettier
+```
+
+The webhook tests sign their own payloads and need nothing. The catalogue
+tests run against Paddle's sandbox when `PADDLE_SANDBOX_API_KEY` is set, and
+archive what they made.
+
+An agent skill ships with the package, in `agents/skills/ecosy-paddle`.
+
+## License
+
+MIT

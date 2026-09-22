@@ -3,7 +3,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { CatalogError, PaddleBilling } from "../dist/index.js";
+import { CatalogError, PaddleBilling } from "../dist/index.mjs";
 
 const key = process.env.PADDLE_SANDBOX_API_KEY;
 const skip = key ? false : "PADDLE_SANDBOX_API_KEY is not set";
